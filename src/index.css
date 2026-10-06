@@ -1,6 +1,289 @@
+:root {
+  --bg: #0f1218;
+  --panel: rgba(20, 24, 32, 0.9);
+  --border: rgba(255, 255, 255, 0.08);
+  --grid: rgba(255, 255, 255, 0.1);
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --accent: #38bdf8;
+  --danger: #f87171;
+
+  font:
+    14px/1.4 system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {
   height: 100%;
   margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+code {
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.muted {
+  color: var(--muted);
+  margin: 0;
+}
+
+/* ---------- layout ---------- */
+
+.app {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Higher specificity than `.mapboxgl-map { position: relative }` from mapbox-gl.css. */
+.app .map {
+  position: absolute;
+  inset: 0;
+}
+
+.map--empty {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.sidebar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  bottom: 96px;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  pointer-events: none;
+}
+
+.sidebar > * {
+  pointer-events: auto;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  backdrop-filter: blur(6px);
+}
+
+.panel__title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---------- layers ---------- */
+
+.layer-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.layer-row__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.layer-row__title {
+  font-weight: 500;
+}
+
+.layer-row__unit {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.layer-row__error {
+  margin: 4px 0 0 24px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.legend {
+  margin: 6px 0 0 24px;
+}
+
+.legend__bar {
+  height: 6px;
+  border-radius: 3px;
+}
+
+.legend__labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  margin-left: auto;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- charts ---------- */
+
+.chart + .chart {
+  margin-top: 10px;
+}
+
+.chart__header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.chart--loading {
+  height: 130px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+/* ---------- timeline ---------- */
+
+.timeline {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px 22px;
+}
+
+.timeline__play {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--accent);
+  color: #0b1220;
+  cursor: pointer;
+}
+
+.timeline__track {
+  position: relative;
+  flex: 1;
+  /* Range thumb is ~16px wide; ticks are inset by half of it to line up with the thumb. */
+  --thumb: 16px;
+}
+
+.timeline__slider {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.timeline__ticks {
+  position: absolute;
+  left: calc(var(--thumb) / 2);
+  right: calc(var(--thumb) / 2);
+  top: 22px;
+}
+
+.timeline__tick {
+  position: absolute;
+  transform: translateX(-50%);
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.timeline__tick--active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.timeline__current {
+  flex: none;
+  min-width: 48px;
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* ---------- 3D toggle ---------- */
+
+.map-3d-toggle {
+  position: absolute;
+  top: 12px;
+  right: 56px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+/* ---------- small screens ---------- */
+
+@media (max-width: 900px) {
+  .timeline__tick--minor {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .sidebar {
+    top: auto;
+    left: 8px;
+    right: 8px;
+    bottom: 100px;
+    width: auto;
+    max-height: 40vh;
+  }
+
+  .timeline {
+    left: 8px;
+    right: 8px;
+    bottom: 12px;
+  }
+
+  .map-3d-toggle {
+    top: 8px;
+    right: 52px;
+  }
 }
