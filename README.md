@@ -3,7 +3,7 @@
 Карта Бишкека с тремя погодными слоями (температура, ветер, инсоляция), timeline и графиками.
 React + TypeScript, состояние в Vedro, графики на Recharts, карта на Mapbox GL JS.
 
-**Демо:** _ссылка будет после деплоя_
+**Демо:** [https://weather-map-pearl-mu.vercel.app/](https://weather-map-pearl-mu.vercel.app/)
 
 ```bash
 cp .env.example .env.local   # вписать VITE_MAPBOX_TOKEN (публичный pk.*)
