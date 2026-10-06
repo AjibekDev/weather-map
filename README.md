@@ -1,73 +1,178 @@
-# React + TypeScript + Vite
+# Weather map
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Карта Бишкека с тремя погодными слоями (температура, ветер, инсоляция), timeline и графиками.
+React + TypeScript, состояние в Vedro, графики на Recharts, карта на Mapbox GL JS.
 
-Currently, two official plugins are available:
+**Демо:** _ссылка будет после деплоя_
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cp .env.example .env.local   # вписать VITE_MAPBOX_TOKEN (публичный pk.*)
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+Что можно сделать в интерфейсе:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- включать и выключать слои;
+- двигать slider, кликать по часам на timeline или по точке на графике;
+- нажать ▶, чтобы время пошло само (один час данных за секунду);
+- кнопка «3D: метеостанция» подлетает к 3D-мачте и зданиям.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## 1. Архитектура
+
 ```
+src/
+  domain/     типы и модель времени: шаги, интерполяция кадров. Ни от чего не зависит
+  api/        mock-источник данных: задержка, AbortSignal
+  layers/     описания слоёв и реестр
+  store/      Vedro store, actions (загрузка, отмена, prefetch), selectors, hooks, playback
+  map/        всё, что знает про Mapbox: MapView, layerController, перевод стилей в paint
+  features/   React UI: LayerPanel, Timeline, Charts
+```
+
+Зависимости идут в одну сторону: `features`, `map` → `store` → `layers` → `api`, `domain`.
+
+FSD рассматривал, но для одной страницы его слои и public API дают больше церемоний, чем пользы. К тому же единый стор Vedro плохо ложится на идею FSD, где состоянием владеют слайсы.
+
+Слой описывается декларативно, это объект `LayerDefinition`:
+
+```ts
+{ id, title, unit, render: 'heatmap' | 'circle' | 'fill', style, timeRange, source }
+```
+
+- `style` не зависит от рендера: шкала значений, цвета, акцентный цвет, флаг стрелок.
+- В Mapbox-выражения его переводит только `map/mapboxLayers.ts`.
+- `source` — это интерфейс `LayerSource` (`fetchFrame`, `fetchSeries`). Сейчас за ним mock, его можно заменить на REST или тайлы, не трогая ни стор, ни UI.
+
+## 2. Почему Mapbox GL JS
+
+- Рендер на WebGL и нативные слои `heatmap`, `circle`, `fill`, `symbol`, `fill-extrusion`. Для погодных полей это ровно то, что нужно.
+- `GeoJSONSource.setData` обновляет данные без пересоздания слоёв, на этом держится плавная анимация.
+- Стили задаются выражениями: цвет и радиус считаются на GPU из `properties.value`.
+- 3D почти бесплатно: `fill-extrusion` для зданий из базовых тайлов и для своей мачты, плюс pitch и bearing камеры.
+
+В Google Maps то же самое делается через deck.gl или WebGL-оверлеи, а это ещё одна зависимость.
+
+## 3. Состояние в Vedro
+
+```ts
+interface AppState {
+  activeLayerIds: LayerId[];
+  selectedTime: Timestamp; // дробное: между часами идёт интерполяция
+  isPlaying: boolean;
+  loading: Record<LayerId, boolean>;
+  errors: Record<LayerId, string | null>;
+  frames: Record<`${layerId}:${time}`, Frame>; // кэш кадров
+  series: Record<LayerId, SeriesPoint[]>; // данные для графиков
+}
+```
+
+- **Стор создаётся на уровне модуля** (`new Vedro(...)`) и передаётся в `createVedro`. Поэтому actions, контроллер карты и playback работают с ним напрямую, без React.
+- **Плоский и нормализованный.** Кадр адресуется ключом `layerId:time`. Производное не хранится: ось времени считается из активных слоёв (`selectTimeSteps`).
+- **Мутации только через `store/actions.ts`**: `toggleLayer`, `setTime`, `setPlaying`. Компоненты не вызывают `dispatch` сами.
+- **В сторе только сериализуемые данные.** `AbortController` для запросов лежат в `Map` внутри модуля actions.
+
+## 4. Как связаны timeline, данные, карта и графики
+
+```
+Timeline / клик по графику ──setTime(t)──► actions ──fetchFrame(t, signal)──► LayerSource
+                                              │
+                                    dispatch: selectedTime, frames, loading
+                                              ▼
+                                         Vedro store
+                    store.on(...) ┌───────────┴────────────┐ useSelector(...)
+                                  ▼                        ▼
+                         layerController              Timeline, Charts,
+                         (Mapbox setData)             LayerPanel
+```
+
+- **`setTime`** записывает `selectedTime` и для каждого активного слоя догружает два соседних кадра (`bracketTime`).
+- **Карта** узнаёт об изменениях через `store.on('selectedTime' | 'frames' | 'activeLayerIds')`. Она берёт кадр через `selectFrameAt`: для дробного времени это интерполяция двух кадров, для направления ветра по кратчайшей дуге. Затем вызывает `setData`.
+- **Графики** показывают `series` слоя. Выбранное время отмечено `ReferenceLine` и точкой со значением, интерполированным так же, как на карте.
+- **Клик по графику** вызывает тот же `setTime`. Так получается двусторонняя синхронизация, и у неё один источник правды.
+
+**Race conditions.** У каждого слоя свой текущий запрос (`AbortController` и набор ключей).
+
+- Новое время отменяет старый запрос: таймер в mock снимается, промис отклоняется с `AbortError`, этот случай ошибкой не считается.
+- Ответ кладётся в кэш по ключу `layerId:time`, а не в «текущий кадр», а карта сама выбирает кадры по актуальному `selectedTime`. Поэтому устаревший ответ не может показаться на карте: в худшем случае он просто лежит в кэше.
+- Проверка в браузере: 10 переключений времени с интервалом 40 мс при задержке mock 200–1200 мс. Загрузились только 2 кадра для последнего времени, `loading` сбросился, ошибок нет.
+
+## 5. Границы ответственности
+
+| Слой       | Что делает                             | Чего не знает                     |
+| ---------- | -------------------------------------- | --------------------------------- |
+| `domain`   | типы, шаги времени, интерполяция       | React, Mapbox, стор               |
+| `api`      | данные и задержка                      | кто и зачем их просит             |
+| `layers`   | что показывать: шкала, цвета, источник | как рисовать                      |
+| `store`    | состояние, загрузка, отмена, playback  | DOM и Mapbox                      |
+| `map`      | Mapbox: слои, paint, `setData`, 3D     | React-компоненты, кроме `MapView` |
+| `features` | UI, чтение через хуки, вызов actions   | Mapbox, источники данных          |
+
+`MapView` — единственная точка контакта React и Mapbox: монтирует карту и создаёт контроллер на `load`. Всё остальное в `layerController.ts` написано на чистом TS.
+
+## 6. Производительность
+
+- **Обновления карты не проходят через React.** Контроллер подписан через `store.on` и вызывает `setData` сам.
+- **Обновления собираются в одну отрисовку за кадр** (`requestAnimationFrame`). Если за кадр пришёл новый кадр данных и сдвинулось время, будет один `setData`, а не два. Если кадр не изменился (та же ссылка), `setData` не вызывается.
+- **`useSelector` в Vedro** на каждый `dispatch` делает `JSON.stringify` старого и нового результата селектора. Поэтому React читает только мелкие данные (`selectedTime`, флаги, `series`), а `frames` не читает никогда.
+- **Кэш кадров:** вернуться к уже показанному часу можно без запроса. При воспроизведении prefetch держит два шага вперёд, при перемотке slider его нет, чтобы не плодить запросы.
+- **Debounce на slider не нужен.** Запрос уходит только при переходе через границу часа, промежуточные отменяются.
+- **Recharts:** анимации отключены (`isAnimationActive={false}`), иначе линия перерисовывалась бы с анимацией на каждый кадр воспроизведения.
+- **Радиус heatmap растёт экспоненциально с zoom** вместе с шагом сетки, поэтому плотность, а с ней и цвет, не зависит от масштаба.
+
+## 7. Как масштабировать с 3 до 100+ слоёв
+
+- **Новый слой — новый файл в `layers/`** и строка в реестре. UI, стор и карта подхватят его сами. При сотне слоёв реестр лучше грузить с сервера или из конфига, а модули слоёв подключать через `import()`.
+- **Данные грузятся только для активных слоёв**, так и сейчас. Источники с общей логикой собираются одной фабрикой, как `createMockSource`.
+- **Слои Mapbox нужно создавать лениво**, при первом включении. Сейчас все три добавляются на старте.
+- **Кэш кадров нужно ограничить** (LRU по ключу `layerId:time`). Сейчас он растёт без ограничений, при трёх слоях и 17 шагах это не важно.
+- **GeoJSON на кадр стоит заменить на векторные или растровые тайлы с временным измерением.** Для больших сеток интерполяцию лучше перенести на GPU (два source и `interpolate` в paint) или на `feature-state`.
+- **UI:** группы и поиск в `LayerPanel`. Графики нужно виртуализировать или показывать для выбранных слоёв.
+- **Разные временные оси слоёв** уже частично поддерживаются: `timeAxis` объединяет шаги. Следующий шаг — интерполировать каждый слой по его собственным шагам, а не по общей оси.
+
+## 8. Осознанные компромиссы
+
+- **Mock вместо API:** сетка 24×16 вокруг Бишкека, значения правдоподобные, но выдуманные. Значение — чистая функция от ячейки и времени, поэтому кэш корректен.
+- **Цвет heatmap Mapbox зависит от плотности, а не от значения.** Шкала пересчитана так, чтобы плотность соответствовала значению, но по краям сетки цвет «остывает». Для точных значений лучше подходит `fill`-сетка, как у инсоляции.
+- **`Promise.all` для двух соседних кадров:** если упал один запрос, второй тоже будет перезапрошен.
+- **Кэш без вытеснения**, слои Mapbox создаются сразу (см. пункт 7).
+- **Временной диапазон — «сегодня 06:00–22:00 по Бишкеку»**, он вычисляется при загрузке модуля.
+- **3D сделано на `fill-extrusion`:** здания из тайлов Mapbox и полосатая мачта из стопки квадратов. glTF-модель не подключал: это ещё один ассет и `model`-слой, а ценности для задания почти не добавляет.
+- **Класс `Vedro` импортируется из `vedro/lib/_Vedro`.** Пакет собран в CommonJS с `exports.default`, и импорт по умолчанию в dev-режиме Vite ломается (`Vedro is not a constructor`).
+- **Тестов нет, не успел.** Первыми бы написал тесты на `domain/time.ts` (`bracketTime`, `lerpAngle`, `interpolateFrames`) и на отмену в `actions.ts`.
+- **UI минимальный.** На узких экранах панель уезжает вниз, подписи часов на timeline прореживаются.
+
+## Использование AI
+
+**Инструмент:** Claude Code (Claude Opus) в VS Code.
+
+**Для чего использовал:**
+
+- в начале: разбор задания, план работ, чтение исходников Vedro;
+- ревью моего кода: `domain/types.ts`, `domain/time.ts`, `store/*`;
+- генерация рутинных частей: mock-генератор данных, описания трёх слоёв, перевод стилей в Mapbox paint, иконка стрелки, 3D-сцена, UI-компоненты, черновик README.
+
+**Что писал сам:** модель домена и времени (`domain/`), стор и actions с отменой запросов (`store/store.ts`, `actions.ts`, `selectors.ts`, `hooks.ts`).
+
+**Что AI нашёл, а я применил:**
+
+- **Композиция вместо наследования:** `LayerDefinition { source: LayerSource }` вместо `LayerDefinition extends LayerSource`.
+- **Особенности Vedro:**
+  - `createVedro` принимает готовый экземпляр;
+  - `useSelector` сериализует результат через JSON;
+  - async-`dispatch` затирает параллельные обновления, потому что partial считается от состояния до `await`.
+
+  Поэтому в загрузчике сначала `await`, потом синхронный `dispatch(s => …)`.
+
+- **Баги:**
+  - ошибка слоя не сбрасывалась (`error && …` при `null`);
+  - CSS Mapbox перебивал `position: absolute` контейнера карты;
+  - импорт класса Vedro падал в dev-режиме.
+
+**Что изменил или отклонил:**
+
+- **FSD отклонил** в пользу простой модульной структуры, причины в пункте 1.
+- **AI предлагал явную проверку latest-wins после `await`.** Сделал иначе: отмена через `AbortController` плюс кэш по ключу. Устаревший ответ при этом не может попасть на карту, так что отдельная проверка не нужна.
+- **Тип загрузки:** AI предлагал `LoadStatus = 'idle' | 'loading' | 'error'`. Оставил `loading: boolean` и отдельный `errors`, чтобы показывать текст ошибки.
+- **`timeSteps` в сторе** (было в первоначальном плане) убрал: это производное от `activeLayerIds`.
+- **Стиль Prettier** AI настроил без точек с запятой, я вернул `;`.
